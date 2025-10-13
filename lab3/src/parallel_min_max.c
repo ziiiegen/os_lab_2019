@@ -21,6 +21,9 @@ int main(int argc, char **argv) {
   int pnum = -1;
   bool with_files = false;
 
+  int (*pipes)[2] = NULL;
+  char **filenames = NULL;
+
   while (true) {
     int current_optind = optind ? optind : 1;
 
@@ -40,24 +43,30 @@ int main(int argc, char **argv) {
         switch (option_index) {
           case 0:
             seed = atoi(optarg);
-            // your code here
-            // error handling
+            if (seed <= 0){
+              printf("seed must be positive number\n");
+              return 1;
+            }
             break;
           case 1:
             array_size = atoi(optarg);
-            // your code here
-            // error handling
+            if (array_size <= 0){
+              printf("array_size must be positive number\n");
+              return 1;
+            }
             break;
           case 2:
             pnum = atoi(optarg);
-            // your code here
-            // error handling
+            if (pnum <= 0){
+              printf("pnum must be positive number\n");
+              return 1;
+            }
             break;
           case 3:
             with_files = true;
             break;
 
-          defalut:
+          default:  
             printf("Index %d is out of options\n", option_index);
         }
         break;
@@ -88,6 +97,22 @@ int main(int argc, char **argv) {
   GenerateArray(array, array_size, seed);
   int active_child_processes = 0;
 
+  if (with_files) {
+    filenames = malloc(pnum * sizeof(char*));
+    for (int i = 0; i < pnum; i++) {
+      filenames[i] = malloc(256);
+      snprintf(filenames[i], 256, "min_max_%d.txt", i);
+    }
+  } else {
+    pipes = malloc(pnum * sizeof(int[2]));
+    for (int i = 0; i < pnum; i++) {
+      if (pipe(pipes[i]) < 0) {
+        printf("Failed to create pipe for process %d\n", i);
+        return 1;
+      }
+    }
+  }
+
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
@@ -98,15 +123,24 @@ int main(int argc, char **argv) {
       active_child_processes += 1;
       if (child_pid == 0) {
         // child process
-
-        // parallel somehow
-
+        unsigned int begin = i * (array_size / pnum);
+        unsigned int end = (i == pnum - 1) ? array_size : (i + 1) * (array_size / pnum);
+        
+        struct MinMax local_min_max = GetMinMax(array, begin, end);
+        
         if (with_files) {
           // use files here
+          FILE* file = fopen(filenames[i], "w");
+          fprintf(file, "%d %d", local_min_max.min, local_min_max.max);
+          fclose(file);
         } else {
-          // use pipe here
+          close(pipes[i][0]);
+          write(pipes[i][1], &local_min_max.min, sizeof(int));
+          write(pipes[i][1], &local_min_max.max, sizeof(int));
+          close(pipes[i][1]);
         }
-        return 0;
+        free(array);
+        exit(0);
       }
 
     } else {
@@ -115,9 +149,14 @@ int main(int argc, char **argv) {
     }
   }
 
-  while (active_child_processes > 0) {
-    // your code here
+  if (!with_files) {
+    for (int i = 0; i < pnum; i++) {
+      close(pipes[i][1]); 
+    }
+  }
 
+  while (active_child_processes > 0) {
+    wait(NULL);
     active_child_processes -= 1;
   }
 
@@ -131,12 +170,30 @@ int main(int argc, char **argv) {
 
     if (with_files) {
       // read from files
+      FILE* file = fopen(filenames[i], "r");
+      if (file != NULL) {
+        fscanf(file, "%d %d", &min, &max);
+        fclose(file);
+        remove(filenames[i]);
+      }
     } else {
       // read from pipes
+      read(pipes[i][0], &min, sizeof(int));
+      read(pipes[i][0], &max, sizeof(int));
+      close(pipes[i][0]);
     }
 
     if (min < min_max.min) min_max.min = min;
     if (max > min_max.max) min_max.max = max;
+  }
+
+  if (with_files) {
+    for (int i = 0; i < pnum; i++) {
+      free(filenames[i]);
+    }
+    free(filenames);
+  } else {
+    free(pipes);
   }
 
   struct timeval finish_time;
